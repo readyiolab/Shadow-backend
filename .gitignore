@@ -1,0 +1,5 @@
+# Firebase / Google credentials
+config/firebase-service-account.json
+config/firebase-service-account.json.json
+*.pem
+*.key
