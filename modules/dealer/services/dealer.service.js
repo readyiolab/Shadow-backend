@@ -153,20 +153,23 @@ async recordDealerTip(data, userId) {
   const cashPercentage = (data.cash_percentage || 50) / 100;
   const cashToDealer = totalChipValue * cashPercentage;
 
-  // ✅ Check BOTH wallets for availability
-  const secondaryAvailable = parseFloat(session.secondary_wallet) || 0;
-  const primaryAvailable = parseFloat(session.primary_wallet) || 0;
-  const totalAvailable = secondaryAvailable + primaryAvailable;
+  // ✅ IMPORTANT: Dealer tips are paid from Cash in Hand (NOT Online Money) + Primary Wallet
+  // Step 1: Check Cash in Hand (cash_balance) first
+  // Step 2: If insufficient, use Primary Wallet (Float)
+  // NEVER use Online Money (online_balance)
+  const cashInHand = parseFloat(session.cash_balance || 0); // Only cash buy-ins
+  const primaryAvailable = parseFloat(session.primary_wallet || 0); // Float
+  const totalAvailable = cashInHand + primaryAvailable;
 
   if (cashToDealer > totalAvailable) {
-    throw new Error(`Insufficient funds. Need ₹${cashToDealer}, Available: ₹${totalAvailable} (Primary: ₹${primaryAvailable}, Secondary: ₹${secondaryAvailable})`);
+    throw new Error(`Insufficient cash. Need ₹${cashToDealer}, Available: ₹${totalAvailable} (Cash in Hand: ₹${cashInHand}, Primary Wallet: ₹${primaryAvailable}). Online Money cannot be used for dealer tips.`);
   }
 
-  // ✅ Payment split - use secondary first, then primary for remaining
-  const paidFromSecondary = Math.min(cashToDealer, secondaryAvailable);
-  const paidFromPrimary = cashToDealer - paidFromSecondary;
-  const paidFromWallet = paidFromSecondary > 0 && paidFromPrimary > 0 ? 'both' : 
-                         paidFromSecondary > 0 ? 'secondary' : 'primary';
+  // ✅ Payment split - use Cash in Hand first, then Primary Wallet for remaining
+  const paidFromCashInHand = Math.min(cashToDealer, cashInHand);
+  const paidFromPrimary = cashToDealer - paidFromCashInHand;
+  const paidFromWallet = paidFromCashInHand > 0 && paidFromPrimary > 0 ? 'both' : 
+                         paidFromCashInHand > 0 ? 'secondary' : 'primary';
 
   // Create tip record
   const result = await db.insert('tbl_dealer_tips', {
@@ -182,7 +185,7 @@ async recordDealerTip(data, userId) {
     cash_percentage: data.cash_percentage || 50,
     paid_from_wallet: paidFromWallet,
     primary_amount: paidFromPrimary,
-    secondary_amount: paidFromSecondary,
+    secondary_amount: paidFromCashInHand,
     notes: data.notes || null,
     recorded_by: userId
   });
@@ -195,13 +198,21 @@ async recordDealerTip(data, userId) {
   );
 
   // ✅ Deduct cash from appropriate wallet(s)
+  // IMPORTANT: Secondary Wallet = Cash in Hand + Online Money
+  // When deducting from Cash in Hand, we must also deduct from Secondary Wallet
+  // DO NOT touch online_balance (Online Money)
   const walletUpdates = {
     total_dealer_tips: (parseFloat(session.total_dealer_tips) || 0) + totalChipValue,
     total_dealer_cash_paid: (parseFloat(session.total_dealer_cash_paid) || 0) + cashToDealer
   };
 
-  if (paidFromSecondary > 0) {
-    walletUpdates.secondary_wallet = secondaryAvailable - paidFromSecondary;
+  if (paidFromCashInHand > 0) {
+    // Deduct from Cash in Hand (part of Secondary Wallet)
+    walletUpdates.cash_balance = cashInHand - paidFromCashInHand;
+    // Also deduct from Secondary Wallet (since Cash in Hand is part of it)
+    // Secondary Wallet = Cash in Hand + Online Money, so we deduct only the Cash in Hand portion
+    walletUpdates.secondary_wallet = parseFloat(session.secondary_wallet || 0) - paidFromCashInHand;
+    // ✅ DO NOT touch online_balance - Online Money remains unchanged
   }
   if (paidFromPrimary > 0) {
     walletUpdates.primary_wallet = primaryAvailable - paidFromPrimary;
@@ -225,7 +236,7 @@ async recordDealerTip(data, userId) {
     chips_10000: chipBreakdown.chips_10000 || 0,
     wallet_used: paidFromWallet === 'both' ? 'split' : paidFromWallet,
     primary_amount: paidFromPrimary,
-    secondary_amount: paidFromSecondary,
+    secondary_amount: paidFromCashInHand,
     notes: data.notes || `Dealer tip - ${dealer.dealer_name} (${data.cash_percentage || 50}% of ₹${totalChipValue})`,
     created_by: userId
   });
@@ -239,9 +250,9 @@ async recordDealerTip(data, userId) {
   // Build payment message
   let paymentMsg = '';
   if (paidFromWallet === 'both') {
-    paymentMsg = `₹${paidFromSecondary} from secondary + ₹${paidFromPrimary} from primary`;
+    paymentMsg = `₹${paidFromCashInHand} from cash in hand + ₹${paidFromPrimary} from primary`;
   } else if (paidFromWallet === 'secondary') {
-    paymentMsg = `₹${cashToDealer} from secondary wallet`;
+    paymentMsg = `₹${cashToDealer} from cash in hand`;
   } else {
     paymentMsg = `₹${cashToDealer} from primary wallet`;
   }
@@ -255,10 +266,11 @@ async recordDealerTip(data, userId) {
     cash_paid: cashToDealer,
     paid_from: paidFromWallet,
     primary_deducted: paidFromPrimary,
-    secondary_deducted: paidFromSecondary,
+    secondary_deducted: paidFromCashInHand,
     message: `✅ Dealer tip recorded. ₹${totalChipValue} chips returned. ${paymentMsg} paid to ${dealer.dealer_name}.`
   };
 }
+
 
   // Get dealer tips for session
   async getDealerTipsForSession(sessionId) {
