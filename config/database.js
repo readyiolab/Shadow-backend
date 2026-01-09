@@ -11,7 +11,7 @@ class Database {
 //     this.username = "root";
     
 //     this.password = "";
-//     this.database = "royalflush_db";
+//     this.database = "gamestechindia";
 
 
     // ✅ CREATE POOL instead of single connection

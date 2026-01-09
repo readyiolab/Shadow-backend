@@ -168,8 +168,8 @@ async recordDealerTip(data, userId) {
   // ✅ Payment split - use Cash in Hand first, then Primary Wallet for remaining
   const paidFromCashInHand = Math.min(cashToDealer, cashInHand);
   const paidFromPrimary = cashToDealer - paidFromCashInHand;
-  const paidFromWallet = paidFromCashInHand > 0 && paidFromPrimary > 0 ? 'both' : 
-                         paidFromCashInHand > 0 ? 'secondary' : 'primary';
+  const paidFromWallet =
+  paidFromCashInHand > 0 ? 'secondary' : 'primary';
 
   // Create tip record
   const result = await db.insert('tbl_dealer_tips', {
